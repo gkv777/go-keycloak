@@ -10,12 +10,13 @@ import (
 
 const (
 	clientId = "go-keycloak"
-	secret   = "jQ9XWHdxIP5lYqyqh1DMWo4trbqgc8qN"
-	realm    = "GMPRO"
+	//secret   = "jQ9XWHdxIP5lYqyqh1DMWo4trbqgc8qN"
+	secret = "amWVdSiKSIURDzq8dG1o2EMHkbHP6kSs"
+	realm  = "GMPRO"
 )
 
 func main() {
-	keycloak := keycloak.NewKeycloak(
+	kcloak := keycloak.NewKeycloak(
 		"http://localhost:8086",
 		clientId,
 		secret,
@@ -24,11 +25,13 @@ func main() {
 	)
 
 	r := chi.NewRouter()
-	r.Post("/login", keycloak.LoginHandler())
+	r.Post("/login", kcloak.LoginHandler())
 	r.Route("/secret", func(r chi.Router) {
-		r.Use(keycloak.AuthMiddleware)
+		r.Use(kcloak.AuthMiddleware)
 		r.Get("/", func(w http.ResponseWriter, r *http.Request) {
+			login := r.Context().Value(keycloak.KeycloakUserLogin).(string)
 			w.Write([]byte("welcome to secret!"))
+			w.Write([]byte(login))
 		})
 	})
 

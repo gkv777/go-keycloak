@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Nerzal/gocloak/v11"
+	"github.com/golang-jwt/jwt/v4"
 )
 
 var ErrLogin = errors.New("Auth error")
@@ -17,10 +18,10 @@ var ErrLogin = errors.New("Auth error")
 type KeycloakCtx string
 
 var (
-	KeycloakUserLogin = "userLogin"
-	KeycloakUserEmail = "userEmail"
-	KeycloakUserName  = "userName"
-	KeycloakUserRoles = "userRoles"
+	KeycloakUserLogin KeycloakCtx = "userLogin"
+	KeycloakUserEmail KeycloakCtx = "userEmail"
+	KeycloakUserName  KeycloakCtx = "userName"
+	KeycloakUserRoles KeycloakCtx = "userRoles"
 )
 
 type userInfo struct {
@@ -85,24 +86,45 @@ func (k *Keycloak) CheckToken(ctx context.Context, token string) (*userInfo, err
 		return nil, ErrLogin
 	}
 
-	jwt, claim, err := k.gocloak.DecodeAccessToken(context.Background(), token, k.realm)
+	at, _, err := k.gocloak.DecodeAccessToken(context.Background(), token, k.realm)
 	if err != nil {
 
 		return nil, err
 	}
 
-	info := &userInfo{
-		Login:    claim["sid"],
-		Email:    KeycloakUserEmail,
-		FullName: "",
-		Roles:    []string{},
+	pclaim, ok := at.Claims.(*jwt.MapClaims)
+	if !ok {
+		log.Println("error type conv")
 	}
 
-	log.Printf("%#v", jwt)
-	log.Println()
-	log.Printf("%#v", claim)
-	log.Println()
-	return nil
+	claim := *pclaim
+	//log.Println(claim)
+
+	access := claim["realm_access"].(map[string]interface{})
+	iroles := access["roles"].([]interface{})
+
+	var roles []string
+	for _, r := range iroles {
+		roles = append(roles, r.(string))
+	}
+
+	ui := &userInfo{
+		Login:    claim["preferred_username"].(string),
+		Email:    claim["email"].(string),
+		FullName: claim["name"].(string),
+		Roles:    roles,
+	}
+
+	//log.Println(cl)
+	//log.Println()
+
+	//cl, ok := claims.(*jwt.MapClaims)
+
+	//log.Printf("%#v", at)
+	//log.Println()
+	//log.Printf("%#v", claims)
+	//log.Println()
+	return ui, nil
 }
 
 func (k *Keycloak) LoginHandler() http.HandlerFunc {
@@ -141,6 +163,7 @@ func (k Keycloak) extractBearerToken(token string) string {
 func (k *Keycloak) AuthMiddleware(next http.Handler) http.Handler {
 	f := func(w http.ResponseWriter, r *http.Request) {
 		token := r.Header.Get("Authorization")
+
 		if token == "" {
 			http.Error(w, "Authorization header missing", http.StatusUnauthorized)
 			return
@@ -166,12 +189,18 @@ func (k *Keycloak) AuthMiddleware(next http.Handler) http.Handler {
 		//}
 
 		ctx, _ := context.WithTimeout(context.Background(), k.timeout)
-		if err := k.CheckToken(ctx, token); err != nil {
+		ui, err := k.CheckToken(ctx, token)
+		if err != nil {
 			http.Error(w, "Invalid or expired Token", http.StatusUnauthorized)
 			return
 		}
 
-		next.ServeHTTP(w, r)
+		uCtx := context.WithValue(r.Context(), KeycloakUserLogin, ui.Login)
+		uCtx = context.WithValue(uCtx, KeycloakUserEmail, ui.Email)
+		uCtx = context.WithValue(uCtx, KeycloakUserName, ui.FullName)
+		uCtx = context.WithValue(uCtx, KeycloakUserRoles, strings.Join(ui.Roles, ","))
+
+		next.ServeHTTP(w, r.WithContext(uCtx))
 
 	}
 	return http.HandlerFunc(f)
